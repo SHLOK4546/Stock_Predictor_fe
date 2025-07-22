@@ -13,16 +13,17 @@ import "./App.css";
 
 function App() {
   const NEWS_API_KEY = "98ffc7490eba4bf6968ef2e6bce7ba42"; // Replace with your NewsAPI key
-  const ALPHA_VANTAGE_API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"; // Replace with your Alpha Vantage API key
+  const ALPHA_VANTAGE_API_KEY = "R0ERK852G9CGX4MY"; // Replace with your Alpha Vantage API key
+  const SENTIMENT_API_URL = "http://192.168.29.85:5000/api/sentiment"; // Update with your Flask backend URL
 
   const [company, setCompany] = useState("");
-  const [prediction, setPrediction] = useState("");
   const [news, setNews] = useState([]);
   const [loading, setLoading] = useState(false);
   const [stockPrices, setStockPrices] = useState({});
   const [showModal, setShowModal] = useState(false);
   const [stockData, setStockData] = useState([]); // For storing historical stock data
   const [currentStock, setCurrentStock] = useState(null); // For storing current stock details
+  const [prediction, setPrediction] = useState(""); // Prediction for modal
 
   const topStocks = [
     { name: "Reliance Industries", symbol: "RELIANCE.BSE" },
@@ -40,7 +41,6 @@ function App() {
     { name: "Suzlon Energy", symbol: "SUZLON.BSE" },
   ];
 
-  // Fetch real-time stock data from Alpha Vantage
   const fetchStockData = async (symbol) => {
     try {
       const response = await axios.get(
@@ -66,26 +66,59 @@ function App() {
     }
   };
 
-  // Fetch stock prices (Mock)
   const fetchStockPrices = async () => {
-    const mockPrices = {
-      "RELIANCE.BSE": 2500,
-      "TCS.BSE": 3500,
-      "HDFCBANK.BSE": 1500,
-      "INFY.BSE": 1800,
-      "ICICIBANK.BSE": 800,
-      "YESBANK.BSE": 12,
-      "IDEA.BSE": 8,
-      "PNBHOUSING.BSE": 300,
-      "IBULHSGFIN.BSE": 200,
-      "SUZLON.BSE": 5,
-    };
-    setStockPrices(mockPrices);
+    const allStocks = [...topStocks, ...worstStocks];
+    const prices = {};
+
+    for (const stock of allStocks) {
+      try {
+        const response = await axios.get(
+          `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${stock.symbol}&apikey=${ALPHA_VANTAGE_API_KEY}`
+        );
+        const data = response.data["Time Series (Daily)"];
+        if (data) {
+          const latestDate = Object.keys(data)[0]; // Get the most recent date
+          prices[stock.symbol] = parseFloat(data[latestDate]["4. close"]) || 0;
+        } else {
+          console.error(`No price data found for ${stock.symbol}`);
+          prices[stock.symbol] = 0;
+        }
+      } catch (error) {
+        console.error(`Error fetching price for ${stock.symbol}:`, error);
+        prices[stock.symbol] = 0;
+      }
+    }
+    setStockPrices(prices);
   };
 
   useEffect(() => {
     fetchStockPrices();
   }, []);
+
+  const analyzeSentimentAndPredict = async (newsText) => {
+    try {
+      const response = await axios.post(SENTIMENT_API_URL, {
+        news_text: newsText,
+      });
+      const { overall_sentiment, average_confidence } = response.data;
+
+      let stockPrediction = "";
+      if (overall_sentiment === "positive" && average_confidence > 0.7) {
+        stockPrediction = "Stock will likely go up 📈 (based on positive news)";
+      } else if (overall_sentiment === "negative" && average_confidence > 0.7) {
+        stockPrediction =
+          "Stock will likely go down 📉 (based on negative news)";
+      } else {
+        stockPrediction =
+          "Stock movement uncertain (neutral or low confidence)";
+      }
+
+      return stockPrediction;
+    } catch (error) {
+      console.error("Error analyzing sentiment:", error);
+      return "Error analyzing news sentiment. Try again later.";
+    }
+  };
 
   const handlePredict = async (companyName = company) => {
     if (!companyName) {
@@ -96,15 +129,6 @@ function App() {
     setLoading(true);
 
     try {
-      // Mock prediction logic
-      const mockPrediction =
-        Math.random() > 0.5
-          ? "Stock will likely go up 📈"
-          : "Stock will likely go down 📉";
-
-      setPrediction(`${mockPrediction}`);
-
-      // Fetch news data from NewsAPI
       const newsResponse = await axios.get(
         `https://newsapi.org/v2/everything?q=${companyName}&sortBy=popularity&apiKey=${NEWS_API_KEY}`
       );
@@ -112,15 +136,19 @@ function App() {
       if (newsResponse.data.articles && newsResponse.data.articles.length > 0) {
         const newsArticles = newsResponse.data.articles
           .slice(0, 5)
-          .map((article) => ({
-            title: article.title, // Only include the title
-          }));
+          .map((article) => article.title);
         setNews(newsArticles);
+
+        const combinedNewsText = newsArticles.join(" ");
+        const stockPrediction = await analyzeSentimentAndPredict(
+          combinedNewsText
+        );
+        setPrediction(stockPrediction);
       } else {
         setNews([{ title: "No news articles found." }]);
+        setPrediction("No news available to predict.");
       }
 
-      // Fetch stock data for the searched company
       const stockSymbol = getStockSymbol(companyName);
       if (stockSymbol) {
         await fetchStockData(stockSymbol);
@@ -140,7 +168,6 @@ function App() {
     }
   };
 
-  // Helper function to get stock symbol from company name
   const getStockSymbol = (companyName) => {
     const allStocks = [...topStocks, ...worstStocks];
     const stock = allStocks.find(
@@ -151,9 +178,9 @@ function App() {
 
   const closeModal = () => {
     setShowModal(false);
-    setCompany(""); // Clear the search bar
-    setPrediction(""); // Clear the prediction
-    setNews([]); // Clear the news
+    setCompany("");
+    setPrediction("");
+    setNews([]);
   };
 
   const handleStockClick = async (companyName, symbol) => {
@@ -178,12 +205,6 @@ function App() {
         </button>
       </div>
 
-      {prediction && (
-        <div className="prediction-result">
-          <h2>Prediction: {prediction}</h2>
-        </div>
-      )}
-
       <div className="stocks-container">
         <div className="top-stocks">
           <h3>Top 5 Stocks in India</h3>
@@ -200,7 +221,7 @@ function App() {
                   <span className="stock-symbol">{stock.symbol}</span>
                 </div>
                 <span className="stock-price">
-                  ₹{stockPrices[stock.symbol]}
+                  ₹{stockPrices[stock.symbol] || "N/A"}
                 </span>
               </div>
             ))}
@@ -222,7 +243,7 @@ function App() {
                   <span className="stock-symbol">{stock.symbol}</span>
                 </div>
                 <span className="stock-price">
-                  ₹{stockPrices[stock.symbol]}
+                  ₹{stockPrices[stock.symbol] || "N/A"}
                 </span>
               </div>
             ))}
@@ -230,7 +251,6 @@ function App() {
         </div>
       </div>
 
-      {/* Stock Data and Graph Section */}
       {currentStock && stockData.length > 0 && (
         <div className="stock-graph">
           <h3>{currentStock.name} Stock Price Trend</h3>
@@ -259,24 +279,28 @@ function App() {
               dataKey="close"
               stroke="#8884d8"
               activeDot={{ r: 8 }}
-              className="recharts-line-positive" // Apply custom class for positive trend
+              className="recharts-line-positive"
             />
           </LineChart>
         </div>
       )}
 
-      {/* Modal for Top 5 Articles */}
       {showModal && (
         <div className="modal-overlay">
           <div className="modal">
             <button className="close-modal" onClick={closeModal}>
-              &times;
+              ×
             </button>
             <h3>Top 5 Articles for {company}</h3>
+            {prediction && (
+              <div className="prediction-result">
+                <h4>Prediction: {prediction}</h4>
+              </div>
+            )}
             <div className="news-list">
               {news.map((article, index) => (
                 <div key={index} className="news-item">
-                  <p>{article.title}</p> {/* Only display the title */}
+                  <p>{article}</p>
                 </div>
               ))}
             </div>
